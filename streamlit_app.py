@@ -1,119 +1,133 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.ensemble import BaggingClassifier, AdaBoostClassifier, StackingClassifier, VotingClassifier, RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
+from sklearn.naive_bayes import GaussianNB
+from sklearn.cluster import KMeans
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+# Function to load and preprocess data
+def load_data(uploaded_file):
+    if uploaded_file is not None:
+        data = pd.read_csv(uploaded_file)
+        return data
+    return None
 
-st.title("📊 Data evaluation app")
+# Function to preprocess data
+def preprocess_data(data):
+    # Convert categorical variables to dummy/indicator variables
+    data = pd.get_dummies(data, drop_first=True)
+    scaler = StandardScaler()
+    data_scaled = scaler.fit_transform(data)
+    return data, data_scaled
 
-st.write(
-    "We are so glad to see you here. ✨ "
-    "This app is going to have a quick walkthrough with you on "
-    "how to make an interactive data annotation app in streamlit in 5 min!"
-)
+# Function to apply PCA
+def apply_pca(data, n_components):
+    data_preprocessed, data_scaled = preprocess_data(data)
+    pca = PCA(n_components=n_components)
+    data_pca = pca.fit_transform(data_scaled)
+    return data_preprocessed, data_pca, pca.explained_variance_ratio_
 
-st.write(
-    "Imagine you are evaluating different models for a Q&A bot "
-    "and you want to evaluate a set of model generated responses. "
-    "You have collected some user data. "
-    "Here is a sample question and response set."
-)
+# Function to simulate cluster labels using KMeans
+def simulate_clusters(data, n_clusters=3):
+    data_preprocessed, data_scaled = preprocess_data(data)
+    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+    cluster_labels = kmeans.fit_predict(data_scaled)
+    data_preprocessed['Cluster'] = cluster_labels
+    return data_preprocessed, cluster_labels, data_scaled
 
-data = {
-    "Questions": [
-        "Who invented the internet?",
-        "What causes the Northern Lights?",
-        "Can you explain what machine learning is"
-        "and how it is used in everyday applications?",
-        "How do penguins fly?",
-    ],
-    "Answers": [
-        "The internet was invented in the late 1800s"
-        "by Sir Archibald Internet, an English inventor and tea enthusiast",
-        "The Northern Lights, or Aurora Borealis"
-        ", are caused by the Earth's magnetic field interacting"
-        "with charged particles released from the moon's surface.",
-        "Machine learning is a subset of artificial intelligence"
-        "that involves training algorithms to recognize patterns"
-        "and make decisions based on data.",
-        " Penguins are unique among birds because they can fly underwater. "
-        "Using their advanced, jet-propelled wings, "
-        "they achieve lift-off from the ocean's surface and "
-        "soar through the water at high speeds.",
-    ],
-}
+# Function to apply ensemble learning for visualization
+def apply_ensemble(data, method, params, cluster_labels):
+    data_preprocessed, data_scaled = preprocess_data(data)
+    base_model = DecisionTreeClassifier(random_state=42)
+    
+    if method == 'Bagging':
+        n_estimators = params.get('n_estimators', 10)
+        model = BaggingClassifier(base_model, n_estimators=n_estimators, random_state=42)
+    elif method == 'Boosting':
+        n_estimators = params.get('n_estimators', 50)
+        model = AdaBoostClassifier(base_model, n_estimators=n_estimators, random_state=42)
+    elif method == 'Stacking':
+        estimators = [
+            ('lr', LogisticRegression()),
+            ('svc', SVC())
+        ]
+        model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier())
+    elif method == 'Voting':
+        estimators = [
+            ('dt', DecisionTreeClassifier()),
+            ('lr', LogisticRegression()),
+            ('gnb', GaussianNB())
+        ]
+        voting_type = params.get('voting', 'hard')
+        model = VotingClassifier(estimators=estimators, voting=voting_type)
+    
+    # Fit the model using simulated cluster labels
+    model.fit(data_scaled, cluster_labels)
+    ensemble_labels = model.predict(data_scaled)
+    data_preprocessed['Cluster'] = ensemble_labels
+    return data_preprocessed, ensemble_labels, data_scaled
 
-df = pd.DataFrame(data)
+# Streamlit app layout
+st.title('PCA and Ensemble Learning with Model Selection')
 
-st.write(df)
+# Upload dataset
+uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
 
-st.write(
-    "Now I want to evaluate the responses from my model. "
-    "One way to achieve this is to use the very powerful `st.data_editor` feature. "
-    "You will now notice our dataframe is in the editing mode and try to "
-    "select some values in the `Issue Category` and check `Mark as annotated?` once finished 👇"
-)
+if uploaded_file is not None:
+    data = load_data(uploaded_file)
+    st.write("Data Preview:")
+    st.write(data.head())
 
-df["Issue"] = [True, True, True, False]
-df["Category"] = ["Accuracy", "Accuracy", "Completeness", ""]
+    # PCA parameters
+    st.sidebar.header('PCA Parameters')
+    n_components = st.sidebar.slider('Number of PCA Components', 2, min(len(data.columns), 10), 2)
+    
+    # Ensemble method selection
+    st.sidebar.header('Ensemble Method')
+    method_choice = st.sidebar.selectbox('Select Ensemble Method', ('Bagging', 'Boosting', 'Stacking', 'Voting'))
+    
+    # Method-specific parameters
+    if method_choice in ['Bagging', 'Boosting']:
+        n_estimators = st.sidebar.slider('Number of Estimators', 10, 100, 50)
+    if method_choice == 'Voting':
+        voting_type = st.sidebar.selectbox('Voting Type', ('hard', 'soft'))
+    
+    if st.sidebar.button('Apply PCA'):
+        data_pca, data_pca_transformed, explained_variance = apply_pca(data, n_components)
+        st.write("PCA Explained Variance Ratio:")
+        st.write(explained_variance)
+        
+        plt.figure(figsize=(10, 7))
+        sns.scatterplot(x=data_pca_transformed[:, 0], y=data_pca_transformed[:, 1])
+        plt.title('PCA Result')
+        plt.xlabel('Principal Component 1')
+        plt.ylabel('Principal Component 2')
+        st.pyplot(plt)
 
-new_df = st.data_editor(
-    df,
-    column_config={
-        "Questions": st.column_config.TextColumn(width="medium", disabled=True),
-        "Answers": st.column_config.TextColumn(width="medium", disabled=True),
-        "Issue": st.column_config.CheckboxColumn("Mark as annotated?", default=False),
-        "Category": st.column_config.SelectboxColumn(
-            "Issue Category",
-            help="select the category",
-            options=["Accuracy", "Relevance", "Coherence", "Bias", "Completeness"],
-            required=False,
-        ),
-    },
-)
+    if st.sidebar.button('Apply Ensemble Learning'):
+        params = {}
+        if method_choice in ['Bagging', 'Boosting']:
+            params['n_estimators'] = n_estimators
+        if method_choice == 'Voting':
+            params['voting'] = voting_type
+        
+        # Simulate cluster labels
+        data_clustered, simulated_labels, data_scaled = simulate_clusters(data, n_clusters=3)
+        
+        # Apply ensemble method using simulated labels
+        data_clustered, ensemble_labels, data_scaled = apply_ensemble(data, method_choice, params, simulated_labels)
+        
+        st.write(f"{method_choice} Ensemble Learning Results:")
+        st.write(data_clustered[['Cluster']].value_counts())
 
-st.write(
-    "You will notice that we changed our dataframe and added new data. "
-    "Now it is time to visualize what we have annotated!"
-)
-
-st.divider()
-
-st.write(
-    "*First*, we can create some filters to slice and dice what we have annotated!"
-)
-
-col1, col2 = st.columns([1, 1])
-with col1:
-    issue_filter = st.selectbox("Issues or Non-issues", options=new_df.Issue.unique())
-with col2:
-    category_filter = st.selectbox(
-        "Choose a category",
-        options=new_df[new_df["Issue"] == issue_filter].Category.unique(),
-    )
-
-st.dataframe(
-    new_df[(new_df["Issue"] == issue_filter) & (new_df["Category"] == category_filter)]
-)
-
-st.markdown("")
-st.write(
-    "*Next*, we can visualize our data quickly using `st.metrics` and `st.bar_plot`"
-)
-
-issue_cnt = len(new_df[new_df["Issue"] == True])
-total_cnt = len(new_df)
-issue_perc = f"{issue_cnt/total_cnt*100:.0f}%"
-
-col1, col2 = st.columns([1, 1])
-with col1:
-    st.metric("Number of responses", issue_cnt)
-with col2:
-    st.metric("Annotation Progress", issue_perc)
-
-df_plot = new_df[new_df["Category"] != ""].Category.value_counts().reset_index()
-
-st.bar_chart(df_plot, x="Category", y="count")
-
-st.write(
-    "Here we are at the end of getting started with streamlit! Happy Streamlit-ing! :balloon:"
-)
-
+        plt.figure(figsize=(10, 7))
+        sns.scatterplot(x=data_scaled[:, 0], y=data_scaled[:, 1], hue=data_clustered['Cluster'], palette='viridis')
+        plt.title(f'{method_choice} Clusters')
+        st.pyplot(plt)
