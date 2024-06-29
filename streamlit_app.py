@@ -4,11 +4,12 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.ensemble import BaggingClassifier, AdaBoostClassifier, StackingClassifier, VotingClassifier, RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import BaggingRegressor, AdaBoostRegressor, StackingRegressor, VotingRegressor, RandomForestRegressor
+from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.svm import SVC
 from sklearn.naive_bayes import GaussianNB
-from sklearn.cluster import KMeans
+from sklearn.metrics import accuracy_score, mean_squared_error
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -20,59 +21,66 @@ def load_data(uploaded_file):
     return None
 
 # Function to preprocess data
-def preprocess_data(data):
-    # Convert categorical variables to dummy/indicator variables
-    data = pd.get_dummies(data, drop_first=True)
+def preprocess_data(data, target):
+    y = data[target]
+    X = data.drop(columns=[target])
+    X = pd.get_dummies(X, drop_first=True)
     scaler = StandardScaler()
-    data_scaled = scaler.fit_transform(data)
-    return data, data_scaled
+    X_scaled = scaler.fit_transform(X)
+    return X, y, X_scaled
 
 # Function to apply PCA
-def apply_pca(data, n_components):
-    data_preprocessed, data_scaled = preprocess_data(data)
+def apply_pca(data, n_components, target):
+    X, y, X_scaled = preprocess_data(data, target)
     pca = PCA(n_components=n_components)
-    data_pca = pca.fit_transform(data_scaled)
-    return data_preprocessed, data_pca, pca.explained_variance_ratio_
+    X_pca = pca.fit_transform(X_scaled)
+    return X, y, X_pca, pca.explained_variance_ratio_
 
-# Function to simulate cluster labels using KMeans
-def simulate_clusters(data, n_clusters=3):
-    data_preprocessed, data_scaled = preprocess_data(data)
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-    cluster_labels = kmeans.fit_predict(data_scaled)
-    data_preprocessed['Cluster'] = cluster_labels
-    return data_preprocessed, cluster_labels, data_scaled
-
-# Function to apply ensemble learning for visualization
-def apply_ensemble(data, method, params, cluster_labels):
-    data_preprocessed, data_scaled = preprocess_data(data)
-    base_model = DecisionTreeClassifier(random_state=42)
+# Function to apply ensemble methods
+def apply_ensemble(X, y, task, method, params):
+    base_model_cls = DecisionTreeClassifier(random_state=42)
+    base_model_reg = DecisionTreeRegressor(random_state=42)
     
-    if method == 'Bagging':
-        n_estimators = params.get('n_estimators', 10)
-        model = BaggingClassifier(base_model, n_estimators=n_estimators, random_state=42)
-    elif method == 'Boosting':
-        n_estimators = params.get('n_estimators', 50)
-        model = AdaBoostClassifier(base_model, n_estimators=n_estimators, random_state=42)
-    elif method == 'Stacking':
-        estimators = [
-            ('lr', LogisticRegression()),
-            ('svc', SVC())
-        ]
-        model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier())
-    elif method == 'Voting':
-        estimators = [
-            ('dt', DecisionTreeClassifier()),
-            ('lr', LogisticRegression()),
-            ('gnb', GaussianNB())
-        ]
-        voting_type = params.get('voting', 'hard')
-        model = VotingClassifier(estimators=estimators, voting=voting_type)
+    if task == 'Classification':
+        if method == 'Bagging':
+            model = BaggingClassifier(base_model_cls, n_estimators=params['n_estimators'], random_state=42)
+        elif method == 'Boosting':
+            model = AdaBoostClassifier(base_model_cls, n_estimators=params['n_estimators'], random_state=42)
+        elif method == 'Stacking':
+            estimators = [
+                ('lr', LogisticRegression()),
+                ('svc', SVC(probability=True))
+            ]
+            model = StackingClassifier(estimators=estimators, final_estimator=RandomForestClassifier())
+        elif method == 'Voting':
+            estimators = [
+                ('dt', DecisionTreeClassifier()),
+                ('lr', LogisticRegression()),
+                ('gnb', GaussianNB())
+            ]
+            model = VotingClassifier(estimators=estimators, voting=params['voting'])
+    else:  # Regression
+        if method == 'Bagging':
+            model = BaggingRegressor(base_model_reg, n_estimators=params['n_estimators'], random_state=42)
+        elif method == 'Boosting':
+            model = AdaBoostRegressor(base_model_reg, n_estimators=params['n_estimators'], random_state=42)
+        elif method == 'Stacking':
+            estimators = [
+                ('lr', LinearRegression()),
+                ('dt', DecisionTreeRegressor())
+            ]
+            model = StackingRegressor(estimators=estimators, final_estimator=RandomForestRegressor())
+        elif method == 'Voting':
+            estimators = [
+                ('dt', DecisionTreeRegressor()),
+                ('lr', LinearRegression()),
+                ('rf', RandomForestRegressor())
+            ]
+            model = VotingRegressor(estimators=estimators)
     
-    # Fit the model using simulated cluster labels
-    model.fit(data_scaled, cluster_labels)
-    ensemble_labels = model.predict(data_scaled)
-    data_preprocessed['Cluster'] = ensemble_labels
-    return data_preprocessed, ensemble_labels, data_scaled
+    model.fit(X, y)
+    predictions = model.predict(X)
+    return model, predictions
 
 # Streamlit app layout
 st.title('PCA and Ensemble Learning with Model Selection')
@@ -84,10 +92,16 @@ if uploaded_file is not None:
     data = load_data(uploaded_file)
     st.write("Data Preview:")
     st.write(data.head())
-
+    
+    target = st.selectbox("Select Target Variable", data.columns)
+    
     # PCA parameters
     st.sidebar.header('PCA Parameters')
-    n_components = st.sidebar.slider('Number of PCA Components', 2, min(len(data.columns), 10), 2)
+    n_components = st.sidebar.slider('Number of PCA Components', 2, min(len(data.columns)-1, 10), 2)
+    
+    # Task selection
+    st.sidebar.header('Task')
+    task_choice = st.sidebar.selectbox('Select Task', ('Classification', 'Regression'))
     
     # Ensemble method selection
     st.sidebar.header('Ensemble Method')
@@ -95,17 +109,17 @@ if uploaded_file is not None:
     
     # Method-specific parameters
     if method_choice in ['Bagging', 'Boosting']:
-        n_estimators = st.sidebar.slider('Number of Estimators', 10, 100, 50)
-    if method_choice == 'Voting':
+        n_estimators = st.sidebar.slider('Number of Estimators', 10, 100, 50, help="Number of base models used in the ensemble.")
+    if method_choice == 'Voting' and task_choice == 'Classification':
         voting_type = st.sidebar.selectbox('Voting Type', ('hard', 'soft'))
     
     if st.sidebar.button('Apply PCA'):
-        data_pca, data_pca_transformed, explained_variance = apply_pca(data, n_components)
+        X, y, X_pca, explained_variance = apply_pca(data, n_components, target)
         st.write("PCA Explained Variance Ratio:")
         st.write(explained_variance)
         
         plt.figure(figsize=(10, 7))
-        sns.scatterplot(x=data_pca_transformed[:, 0], y=data_pca_transformed[:, 1])
+        sns.scatterplot(x=X_pca[:, 0], y=X_pca[:, 1], hue=y)
         plt.title('PCA Result')
         plt.xlabel('Principal Component 1')
         plt.ylabel('Principal Component 2')
@@ -115,19 +129,21 @@ if uploaded_file is not None:
         params = {}
         if method_choice in ['Bagging', 'Boosting']:
             params['n_estimators'] = n_estimators
-        if method_choice == 'Voting':
+        if method_choice == 'Voting' and task_choice == 'Classification':
             params['voting'] = voting_type
         
-        # Simulate cluster labels
-        data_clustered, simulated_labels, data_scaled = simulate_clusters(data, n_clusters=3)
+        X, y, X_scaled = preprocess_data(data, target)
         
-        # Apply ensemble method using simulated labels
-        data_clustered, ensemble_labels, data_scaled = apply_ensemble(data, method_choice, params, simulated_labels)
+        model, predictions = apply_ensemble(X_scaled, y, task_choice, method_choice, params)
         
-        st.write(f"{method_choice} Ensemble Learning Results:")
-        st.write(data_clustered[['Cluster']].value_counts())
+        if task_choice == 'Classification':
+            accuracy = accuracy_score(y, predictions)
+            st.write(f"{method_choice} {task_choice} Accuracy: {accuracy}")
+        else:  # Regression
+            mse = mean_squared_error(y, predictions)
+            st.write(f"{method_choice} {task_choice} Mean Squared Error: {mse}")
 
         plt.figure(figsize=(10, 7))
-        sns.scatterplot(x=data_scaled[:, 0], y=data_scaled[:, 1], hue=data_clustered['Cluster'], palette='viridis')
-        plt.title(f'{method_choice} Clusters')
+        sns.scatterplot(x=X_scaled[:, 0], y=X_scaled[:, 1], hue=predictions, palette='viridis')
+        plt.title(f'{method_choice} {task_choice} Predictions')
         st.pyplot(plt)
